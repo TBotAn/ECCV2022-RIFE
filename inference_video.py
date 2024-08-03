@@ -10,8 +10,11 @@ import _thread
 import skvideo.io
 from queue import Queue, Empty
 from model.pytorch_msssim import ssim_matlab
+from torch.nn import DataParallel  # Import DataParallel
 
 warnings.filterwarnings("ignore")
+
+torch.cuda.empty_cache()  # Add this line to clear cache
 
 def transferAudio(sourceVideo, targetVideo):
     import shutil
@@ -107,8 +110,10 @@ except:
     model = Model()
     model.load_model(args.modelDir, -1)
     print("Loaded ArXiv-RIFE model")
+
+model = DataParallel(model)  # Wrap model with DataParallel
+model.to(device)
 model.eval()
-model.device()
 
 if not args.video is None:
     videoCapture = cv2.VideoCapture(args.video)
@@ -177,7 +182,7 @@ def build_read_buffer(user_args, read_buffer, videogen):
 
 def make_inference(I0, I1, n):
     global model
-    middle = model.inference(I0, I1, args.scale)
+    middle = model.module.inference(I0, I1, args.scale)
     if n == 1:
         return [middle]
     first_half = make_inference(I0, middle, n=n//2)
@@ -237,7 +242,7 @@ while True:
             temp = frame
         I1 = torch.from_numpy(np.transpose(frame, (2,0,1))).to(device, non_blocking=True).unsqueeze(0).float() / 255.
         I1 = pad_image(I1)
-        I1 = model.inference(I0, I1, args.scale)
+        I1 = model.module.inference(I0, I1, args.scale)
         I1_small = F.interpolate(I1, (32, 32), mode='bilinear', align_corners=False)
         ssim = ssim_matlab(I0_small[:, :3], I1_small[:, :3])
         frame = (I1[0] * 255).byte().cpu().numpy().transpose(1, 2, 0)[:h, :w]
@@ -246,15 +251,6 @@ while True:
         output = []
         for i in range((2 ** args.exp) - 1):
             output.append(I0)
-        '''
-        output = []
-        step = 1 / (2 ** args.exp)
-        alpha = 0
-        for i in range((2 ** args.exp) - 1):
-            alpha += step
-            beta = 1-alpha
-            output.append(torch.from_numpy(np.transpose((cv2.addWeighted(frame[:, :, ::-1], alpha, lastframe[:, :, ::-1], beta, 0)[:, :, ::-1].copy()), (2,0,1))).to(device, non_blocking=True).unsqueeze(0).float() / 255.)
-        '''
     else:
         output = make_inference(I0, I1, 2**args.exp-1) if args.exp else []
 
